@@ -1,0 +1,32 @@
+# Environment
+venv/
+env/
+.env
+*.pyc
+__pycache__/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (raw datasets — too large)
+data/raw/
+*.csv.zip
+*.tar.gz
+
+# Model artifacts (if experimenting locally)
+models/experiments/
+*.joblib
+*.h5
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
