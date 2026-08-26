@@ -12,6 +12,9 @@ IMPORTANT / HONEST LIMITATIONS (shown in the app itself, not hidden):
 - Requires several hours of sequential readings -- a single timepoint isn't
   enough, because key features are rolling trends, not snapshots.
 """
+import os
+from pathlib import Path
+
 import gradio as gr
 import pandas as pd
 import numpy as np
@@ -20,13 +23,24 @@ import shap
 import matplotlib.pyplot as plt
 
 try:
-    import spaces  # no-op off ZeroGPU; lets the app build cleanly if HF assigns ZeroGPU hardware
+    import spaces
 except ImportError:
-    pass
+    spaces = None
 
+if spaces is not None:
+    @spaces.GPU(duration=4)
+    def _touch_gpu():
+        """Keep ZeroGPU-compatible deployments healthy; prediction itself is CPU-only."""
+        return None
+else:
+    def _touch_gpu():
+        return None
+
+BASE_DIR = Path(__file__).resolve().parent
 VITALS = ["HR", "O2Sat", "Temp", "SBP", "MAP", "DBP", "Resp"]
 
-with open("baseline_model.pkl", "rb") as f:
+with (BASE_DIR / "baseline_model.pkl").open("rb") as f:
+
     saved = pickle.load(f)
 MODEL, FEATURE_COLS = saved["model"], saved["feature_cols"]
 EXPLAINER = shap.TreeExplainer(MODEL)
@@ -65,14 +79,41 @@ def predict(csv_file):
     if csv_file is None:
         return None, "Upload a CSV first.", None
 
-    raw = pd.read_csv(csv_file)
-    missing_cols = [c for c in VITALS + ["Age", "Gender", "ICULOS"] if c not in raw.columns]
+    path = Path(str(csv_file))
+    if not path.exists():
+        return None, "The uploaded file could not be found.", None
+    if path.stat().st_size > 5 * 1024 * 1024:
+        return None, "CSV files must be smaller than 5 MB.", None
+
+    try:
+        raw = pd.read_csv(path)
+    except (OSError, ValueError) as exc:
+        return None, f"Could not read the CSV: {exc}", None
+
+    required = VITALS + ["Age", "Gender", "ICULOS"]
+    missing_cols = [c for c in required if c not in raw.columns]
     if missing_cols:
         return None, f"CSV is missing required columns: {missing_cols}", None
     if len(raw) < 6:
         return None, "Need at least 6 hourly rows for rolling features to be meaningful.", None
 
+    raw = raw[required].copy()
+    for col in required:
+        raw[col] = pd.to_numeric(raw[col], errors="coerce")
+    non_vital = ["Age", "Gender", "ICULOS"]
+    if raw[non_vital].isna().any().any():
+        return None, "Age, Gender, and ICULOS must contain numeric values.", None
+    if not np.isfinite(raw[non_vital].to_numpy()).all():
+        return None, "Age, Gender, and ICULOS must be finite.", None
+    if raw["ICULOS"].duplicated().any() or (raw["ICULOS"] < 0).any():
+        return None, "ICULOS must contain unique non-negative hour values.", None
+    if ((raw["Age"] < 0) | (raw["Age"] > 120)).any():
+        return None, "Age must be between 0 and 120.", None
+    if (~raw["Gender"].isin([0, 1])).any():
+        return None, "Gender must use the dataset encoding 0 or 1.", None
+
     feats = engineer_features(raw)
+
     probs = MODEL.predict_proba(feats[FEATURE_COLS])[:, 1]
     feats["risk"] = probs
 
@@ -99,7 +140,9 @@ def predict(csv_file):
         lines.append(f"- `{feat}` {direction} risk (value: {latest[feat]:.2f})")
 
     summary = "\n".join(lines)
-    return fig, summary, feats[["ICULOS", "risk"] + VITALS].round(2)
+    table = feats[["ICULOS", "risk"] + VITALS].round(2)
+    plt.close(fig)
+    return fig, summary, table
 
 
 DISCLAIMER = """
@@ -116,6 +159,14 @@ with gr.Blocks(title="Early Sepsis Risk Demo") as app:
 
     with gr.Row():
         file_input = gr.File(label="Patient vitals CSV", file_types=[".csv"])
+    gr.Examples(
+        examples=[
+            [str(BASE_DIR / "sample_patient_stable.csv")],
+            [str(BASE_DIR / "sample_patient_deteriorating.csv")],
+        ],
+        inputs=file_input,
+        label="Try an example patient",
+    )
     run_btn = gr.Button("Run risk analysis", variant="primary")
 
     plot_output = gr.Plot(label="Risk trajectory")
