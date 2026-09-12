@@ -1,6 +1,6 @@
 # Early Sepsis Detection
 
-An end-to-end healthcare ML project that uses **hourly ICU vital signs** to flag rising sepsis risk. The project focuses on the complete workflow: temporal feature engineering, model training, threshold calibration, explainability, and deployment.
+A healthcare machine-learning prototype that uses **hourly ICU vital signs** to model changing sepsis-related signal patterns over time. The project focuses on temporal feature engineering, XGBoost inference, threshold analysis, SHAP explanations, and a Gradio demonstration interface.
 
 > **Research / portfolio prototype:** This project is not a clinical decision tool and must not be used for patient care. Clinical deployment would require independent validation, prospective evaluation, safety engineering, regulatory review, and qualified clinical oversight.
 
@@ -14,10 +14,12 @@ Upload a CSV containing hourly patient observations:
 
 The application produces:
 
-- A risk trajectory showing how the model score changes over time
+- A model-score trajectory showing how the classifier output changes over time
 - SHAP-based feature explanations for the latest prediction
 - An hourly detail table
 - Built-in stable and deteriorating example patients for demonstration
+
+The displayed score is a **model output**, not a calibrated clinical probability.
 
 ## Dataset
 
@@ -26,7 +28,7 @@ The project uses the **PhysioNet / Computing in Cardiology Challenge 2019** data
 - 40,336 ICU patients
 - Approximately 1.55 million hourly rows
 - Approximately 7.27% patient-level sepsis prevalence
-- Dataset is not redistributed in this repository; obtain it from PhysioNet according to its terms
+- The original dataset is not redistributed in this repository; obtain it from PhysioNet according to its terms
 
 ## Machine-learning pipeline
 
@@ -39,60 +41,62 @@ Temporal feature engineering
        ↓
 XGBoost classifier
        ↓
-Threshold calibration
+Project threshold analysis
        ↓
 SHAP explanation
        ↓
-Risk tier + trajectory
+Model-score tier + trajectory
        ↓
 Gradio application
 ```
 
 ### Engineered features
 
-The model uses **46 features**, including:
+The deployed inference pipeline in `app.py` builds temporal features including:
 
-- Rolling statistics
+- Rolling mean and standard deviation over recent observations
 - Rate-of-change features
 - Missingness indicators
+- Hours-since-measurement features
 - Shock index
 - Patient/context variables
 
-The model is designed around trends rather than a single vital-sign snapshot.
+The prototype is designed around **trends rather than a single vital-sign snapshot**.
 
-### Model
+> **Repository scope note:** the current public repository contains the deployment/inference pipeline and a serialized baseline model. The original model-training scripts referenced in earlier documentation are not currently present in the repository, so the exact training split and training configuration cannot be independently reproduced from this repository alone.
 
-**XGBoost** was selected because the input is structured tabular data after feature engineering. It provides strong performance on this type of data while remaining relatively lightweight and works well with SHAP for local explanations.
+## Model
 
-Reported cross-validation performance:
+**XGBoost** is used for structured tabular data after temporal feature engineering. SHAP is used to provide local feature-attribution views for the latest model output.
 
-- **AUROC:** ~0.78 ± 0.006
-- **AUPRC:** ~0.10
+Any performance figures from prior experiments should be treated as **project evaluation results only** until the full training/evaluation pipeline is published with patient-level splits, seeds, feature definitions, and reproducible commands.
 
-These numbers should be interpreted as project evaluation results, not evidence of clinical effectiveness.
+## Threshold analysis
 
-## Threshold calibration
+The demonstration uses an **80% model-score operating threshold**. This is a project setting for the deployed prototype, not a clinical alert rule.
 
-Rather than treating the classifier's raw output as a clinical probability, the project evaluates thresholds using a false-alarm/lead-time tradeoff.
-
-The current demonstration uses an **80% model-score threshold**, associated in the project's evaluation with approximately:
-
-- **5.2% false-alarm rate**
-- **~49-hour median lead time**
-
-These figures require independent validation before they could support any clinical claim.
+Earlier project evaluation associated this threshold with an approximate false-alarm/lead-time tradeoff. Those figures are **not independently reproducible from the current public repository** because the original threshold-sweep artifacts and training pipeline are not included.
 
 ## Why labs are excluded
 
-The project deliberately focuses on routinely available hourly vital signs. Laboratory measurements can be irregular and may also reflect the fact that clinicians have already become concerned about a patient. Restricting the prototype to vital signs keeps the research question focused on earlier physiological trends rather than simply reproducing an existing clinical suspicion.
+The prototype focuses on routinely available hourly vital signs. This keeps the research question centered on physiological trends rather than adding irregular laboratory measurements that may be influenced by an existing clinical concern.
 
-## Why risk tiers instead of raw probabilities?
+## Why model-score tiers instead of raw probabilities?
 
-The training setup uses class weighting to address the strong class imbalance. Because this affects the interpretation of the raw classifier score, the application presents **risk tiers** rather than implying that a score such as `0.85` means an actual 85% probability of sepsis.
+The training setup uses class weighting to address class imbalance. The application therefore avoids presenting a raw classifier output such as `0.85` as an actual 85% probability of sepsis.
 
 ## Deployment
 
-The application is deployed with **Gradio on Hugging Face Spaces**. The prediction pipeline runs on CPU; the deployment configuration is documented in `STATUS.md`.
+The application is deployed with **Gradio on Hugging Face Spaces**. The prediction path is designed to run on CPU; deployment notes and known fixes are documented in `STATUS.md`.
+
+## Example data
+
+Two small synthetic demonstration files are included:
+
+- `sample_patient_stable.csv`
+- `sample_patient_deteriorating.csv`
+
+They are intended only to demonstrate the interface and trajectory visualization. They are **not clinical patient records** and must not be interpreted as validated clinical examples.
 
 ## Honest limitations
 
@@ -100,26 +104,21 @@ The application is deployed with **Gradio on Hugging Face Spaces**. The predicti
 - Requires sequential hourly observations
 - No prospective clinical validation
 - Not intended for diagnosis or treatment decisions
-- Raw classifier scores should not be interpreted as calibrated clinical probabilities
+- Raw classifier scores are not calibrated clinical probabilities
 - Dataset shift and missing-data patterns may affect performance
-- Threshold/lead-time results require independent reproduction
+- Threshold and lead-time results require independent reproduction
+- The public repository does not currently contain the full training/evaluation pipeline
 
 ## Repository structure
 
 ```text
-early-sepsis-detection/
+sepsis-detection/
 ├── app.py
 ├── baseline_model.pkl
 ├── requirements.txt
 ├── STATUS.md
-├── data/
-│   ├── sample_patient_stable.csv
-│   └── sample_patient_deteriorating.csv
-└── src/
-    ├── 03_feature_engineering.py
-    ├── 04_model_training.py
-    ├── 05_threshold_calibration.py
-    └── 06_shap_explainability.py
+├── sample_patient_stable.csv
+└── sample_patient_deteriorating.csv
 ```
 
 ## Run locally
@@ -129,9 +128,19 @@ pip install -r requirements.txt
 python app.py
 ```
 
-## Reproducibility
+The local app expects `baseline_model.pkl` in the repository root.
 
-For a stronger independent reproduction, use the same dataset version and document the exact patient-level split, preprocessing steps, random seeds, feature columns, XGBoost configuration, and threshold-selection procedure. Evaluation should include patient-disjoint validation and clinically meaningful metrics such as sensitivity, specificity, AUROC, AUPRC, false-alarm rate, and lead time.
+## Reproducibility roadmap
+
+For an independent reproduction, the next release should publish:
+
+1. The exact patient-level train/validation/test split
+2. Random seeds and XGBoost hyperparameters
+3. The complete feature-definition and preprocessing pipeline
+4. Training and threshold-selection commands
+5. Versioned evaluation artifacts
+6. Patient-disjoint metrics including sensitivity, specificity, AUROC, AUPRC, false-alarm rate, and lead time
+7. Calibration analysis if probabilities are ever presented
 
 ## Acknowledgments
 
